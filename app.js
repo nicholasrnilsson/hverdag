@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.3 – itslearning-import';
+const APP_VERSION = '1.4 – itslearning-import';
 
 // Opgavestørrelser i timer
 const SIZES = { S: 1, M: 3, L: 8, XL: 15 };
@@ -768,9 +768,9 @@ async function refreshIcal({ silent = false } = {}) {
   if (!silent) toast('Henter skema…');
   try {
     const res = await fetch(target, { cache: 'no-store' });
-    if (!res.ok) throw Object.assign(new Error(`Serveren svarede ${res.status}`), { kind: 'http' });
     const text = await res.text();
-    if (!text.includes('BEGIN:VCALENDAR')) throw Object.assign(new Error('Svaret var ikke en kalender'), { kind: 'format' });
+    if (!res.ok) throw Object.assign(new Error(`Serveren svarede ${res.status}: ${text.slice(0, 250)}`), { kind: 'http' });
+    if (!text.includes('BEGIN:VCALENDAR')) throw Object.assign(new Error(`Svaret var ikke en kalender: ${text.slice(0, 200)}`), { kind: 'format' });
     const { items, counts } = icsToItems(parseIcs(text));
     data.imported = items;
     data.hiddenImports = data.hiddenImports.filter(id => items.some(i => i.id === id));
@@ -790,12 +790,15 @@ function importStatusHtml() {
   const m = data.importMeta;
   if (!data.settings.icalUrl) return '';
   if (m.ok === false) {
+    if (m.error === 'blocked' && data.settings.icalProxy) {
+      return `<div class="card load over small"><b>Kunne ikke nå hente-tjenesten.</b> Tjek at adressen er rigtig: <b>${esc(data.settings.icalProxy)}</b> (den skal ende på .workers.dev).</div>`;
+    }
     if (m.error === 'blocked') {
       return `<div class="card load over small"><b>Blokeret.</b> Telefonen fik ikke lov til at hente linket direkte fra itslearning.
         Det betyder, at vi skal bruge en lille hente-tjeneste. Skriv <b>"blokeret"</b> til Claude, så sætter vi den op.</div>`;
     }
     if (m.error === 'offline') return `<div class="card load tight small">Du er offline. Prøv igen, når du har net.</div>`;
-    return `<div class="card load over small"><b>Fejl:</b> ${esc(m.error)}. Tjek at linket er kopieret helt.</div>`;
+    return `<div class="card load over small"><b>Fejl:</b> ${esc(m.error)}<br><span class="muted">Hente-tjeneste: ${esc(data.settings.icalProxy || '(ingen)')}</span></div>`;
   }
   if (m.ok && m.counts) {
     const c = m.counts;

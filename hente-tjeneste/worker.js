@@ -25,10 +25,22 @@ export default {
       return new Response('Dette link er ikke tilladt', { status: 403, headers: cors });
     }
 
-    const res = await fetch(u.toString(), { headers: { 'User-Agent': 'Mozilla/5.0 (Hverdag-app)' } });
-    const body = await res.text();
+    let res, body;
+    try {
+      res = await fetch(u.toString(), {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15', 'Accept': 'text/calendar, */*' },
+        redirect: 'follow',
+      });
+      body = await res.text();
+    } catch (err) {
+      return new Response('Hente-tjenesten kunne ikke nå itslearning: ' + err.message, { status: 502, headers: cors });
+    }
+    if (!res.ok || !body.includes('BEGIN:VCALENDAR')) {
+      const hint = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+      return new Response(`itslearning svarede ${res.status} (${res.url.split('?')[0]}): ${hint}`, { status: 502, headers: cors });
+    }
     return new Response(body, {
-      status: res.status,
+      status: 200,
       headers: { ...cors, 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'no-store' },
     });
   },
