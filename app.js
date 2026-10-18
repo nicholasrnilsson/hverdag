@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.1 – itslearning-import';
+const APP_VERSION = '1.2 – itslearning-import';
 
 // Opgavestørrelser i timer
 const SIZES = { S: 1, M: 3, L: 8, XL: 15 };
@@ -976,7 +976,17 @@ function autoRefreshIcal() {
 
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+    .then(reg => reg.update())
+    .catch(() => {});
+  // Når en ny version er klar, genindlæses appen én gang automatisk
+  let reloaded = false;
+  const hadController = !!navigator.serviceWorker.controller; // ikke ved allerførste åbning
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded || !$('#sheet').hidden) return;
+    reloaded = true;
+    location.reload();
+  });
 }
 
 render();

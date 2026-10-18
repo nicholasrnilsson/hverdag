@@ -1,6 +1,6 @@
 // Service worker: gør at appen åbner uden internet.
 // Strategi: hent altid nyeste version når der er net, ellers brug den gemte kopi.
-const CACHE = 'hverdag-v2';
+const CACHE = 'hverdag-v3';
 const FILES = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 
@@ -17,8 +17,9 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // cache: 'no-cache' = spørg altid GitHub, om der er en ny version (hurtigt, hvis intet er ændret)
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request.url, { cache: 'no-cache' })
       .then(res => {
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy));
