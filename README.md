@@ -28,7 +28,7 @@ Grænserne kan justeres øverst i `app.js` (`LOAD_OK`, `LOAD_TIGHT`, `SIZES`).
 ## Faser
 
 1. ✅ MVP: I dag, uge, opgaver, faste ugepunkter, ugebelastning, backup
-2. Import af VIA-skema (itslearning) og Garmin-plan via kalenderlinks
+2. ✅ Import af VIA-skema fra itslearning (Garmin-plan kommer senere)
 3. Planlægger: forslag til skoleblokke, delopgaver, konflikter (fx langtur før deadline)
 4. Sociale planer med advarsel + søndagsgennemgang
 5. Synk til Mac, notifikationer

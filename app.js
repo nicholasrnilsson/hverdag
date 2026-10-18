@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.0 – fase 1';
+const APP_VERSION = '1.1 – itslearning-import';
 
 // Opgavestørrelser i timer
 const SIZES = { S: 1, M: 3, L: 8, XL: 15 };
@@ -53,7 +53,12 @@ function defaultData() {
       dayEnd: '22:00',     // hvornår dagen slutter
       overhead: 2.5,       // timer pr. dag til mad, transport, pauser
       lastBackup: null,
+      icalUrl: '',         // itslearning-link (gemmes kun på telefonen)
+      icalProxy: '',       // evt. hente-tjeneste, hvis itslearning blokerer
     },
+    imported: [],          // undervisning hentet fra itslearning
+    importMeta: { lastFetch: null, ok: null, error: null, counts: null },
+    hiddenImports: [],     // importerede punkter du har aflyst
   };
 }
 
@@ -64,6 +69,9 @@ function migrate(d) {
     events: Array.isArray(d.events) ? d.events : [],
     tasks: Array.isArray(d.tasks) ? d.tasks : [],
     templates: Array.isArray(d.templates) ? d.templates : def.templates,
+    imported: Array.isArray(d.imported) ? d.imported : [],
+    importMeta: { ...def.importMeta, ...(d.importMeta || {}) },
+    hiddenImports: Array.isArray(d.hiddenImports) ? d.hiddenImports : [],
     settings: { ...def.settings, ...(d.settings || {}) },
   };
 }
@@ -162,6 +170,9 @@ function hasTime(i) { return !!(i.start && i.end); }
 function itemsForDate(date) {
   const wd = isoWeekday(date);
   const out = data.events.filter(e => e.date === date).map(e => ({ ...e, source: 'event' }));
+  for (const im of data.imported) {
+    if (im.date === date && !data.hiddenImports.includes(im.id)) out.push({ ...im, source: 'import' });
+  }
   for (const t of data.templates) {
     if (t.weekday === wd && !(t.skip || []).includes(date)) {
       out.push({ ...t, id: undefined, templateId: t.id, date, source: 'template' });
@@ -291,8 +302,9 @@ function itemLabel(i) {
   }
   return i.title || TYPES[i.type];
 }
-function timeLabel(i) { return hasTime(i) ? `${i.start}–${i.end}` : 'Hele dagen'; }
+function timeLabel(i) { return hasTime(i) ? `${i.start}–${i.end}` : i.start ? `kl. ${i.start}` : 'Hele dagen'; }
 function itemAttrs(i) {
+  if (i.source === 'import') return `data-action="openItem" data-imp="${esc(i.id)}"`;
   return i.source === 'template'
     ? `data-action="openItem" data-tpl="${i.templateId}" data-date="${i.date}"`
     : `data-action="openItem" data-id="${i.id}"`;
@@ -301,6 +313,7 @@ function itemAttrs(i) {
 function itemRow(i) {
   const tags = [];
   if (i.source === 'template') tags.push('<span class="tag">fast</span>');
+  if (i.source === 'import') tags.push('<span class="tag">itslearning</span>');
   if (i.locked) tags.push('<span class="tag lock">låst</span>');
   return `<button class="item t-${i.type} ${i.done ? 'done' : ''}" ${itemAttrs(i)}>
     <span class="time">${timeLabel(i)}</span>
@@ -454,6 +467,20 @@ function renderMore() {
     </div>`).join('') : '<div class="empty">Ingen faste punkter.</div>';
   h += `</div><button class="btn block" data-action="addTemplate">+ Tilføj fast punkt</button>
     <p class="small muted">Fx undervisning, fodbold eller en fast vagt. Er der ingen undervisning en enkelt dag, så tryk på punktet i dagens program og vælg "Aflys denne gang".</p>`;
+
+  h += `<h2>Skema fra itslearning</h2><div class="card">
+    <div class="field" style="margin-top:0"><label for="icalUrl">Kalenderlink</label>
+      <input type="text" id="icalUrl" data-setting="icalUrl" value="${esc(s.icalUrl)}" placeholder="webcal://via.itslearning.com/…"
+        autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url"></div>
+    <button class="btn block primary" data-action="icalFetch">Hent skema</button>
+    ${data.imported.length ? `<button class="btn block danger" data-action="icalClear">Fjern importeret skema</button>` : ''}
+    <details class="small muted"><summary>Avanceret: hente-tjeneste</summary>
+      <div class="field"><label for="icalProxy">Adresse (udfyldes kun, hvis Claude beder dig om det)</label>
+      <input type="text" id="icalProxy" data-setting="icalProxy" value="${esc(s.icalProxy)}" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url"></div>
+    </details>
+  </div>
+  ${importStatusHtml()}
+  <p class="small muted">Linket gemmes kun på din telefon (og i dine backup-filer). Skemaet opdateres automatisk, når du åbner appen.</p>`;
 
   h += `<h2>Din dag</h2><div class="card">
     <div class="setting-row"><span>Dagen starter</span><input type="time" data-setting="dayStart" value="${s.dayStart}"></div>
@@ -623,6 +650,18 @@ function submitForm(form) {
 // Detaljer for et punkt i programmet
 function openItemSheet(el) {
   let i;
+  if (el.dataset.imp) {
+    const im = data.imported.find(x => x.id === el.dataset.imp);
+    if (!im) return;
+    i = { ...im, source: 'import' };
+    openSheet(`<p class="sheet-title">${esc(i.title)}</p>
+      <p class="muted" style="margin-top:0">Fra itslearning · ${fmtDate(i.date)} · ${timeLabel(i)}${i.location ? ' · ' + esc(i.location) : ''}</p>
+      ${i.description ? `<p class="small">${esc(i.description).slice(0, 400)}</p>` : ''}
+      <button class="btn block primary" data-action="impToTask" data-imp="${esc(i.id)}">Lav til opgave med deadline</button>
+      <button class="btn block" data-action="impSkip" data-imp="${esc(i.id)}">Aflys denne gang (skjul)</button>
+      <button class="btn block" data-action="closeSheet">Luk</button>`);
+    return;
+  }
   if (el.dataset.tpl) {
     const t = data.templates.find(x => x.id === el.dataset.tpl);
     if (!t) return;
@@ -647,6 +686,129 @@ function openItemSheet(el) {
   }
   h += `<button class="btn block" data-action="closeSheet">Luk</button>`;
   openSheet(h);
+}
+
+// ============ 6b. Import fra itslearning (kalenderlink / .ics) ============
+// Et kalenderlink er en tekstfil i formatet iCalendar. Vi henter den, læser hver
+// begivenhed (VEVENT) og viser dem som skole-punkter. Ved hver hentning erstattes
+// det gamle import helt, så ændringer i skemaet altid slår igennem.
+
+function parseIcs(text) {
+  // Lange linjer er "foldet": en linje der starter med mellemrum hører til linjen før
+  const lines = text.replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n');
+  const events = [];
+  let cur = null;
+  for (const line of lines) {
+    if (line === 'BEGIN:VEVENT') { cur = {}; continue; }
+    if (line === 'END:VEVENT') { if (cur) events.push(cur); cur = null; continue; }
+    if (!cur) continue;
+    const idx = line.indexOf(':');
+    if (idx < 0) continue;
+    const [name, ...params] = line.slice(0, idx).split(';');
+    const p = {};
+    for (const x of params) { const [k, v] = x.split('='); p[k.toUpperCase()] = v; }
+    cur[name.toUpperCase()] = { value: line.slice(idx + 1), params: p };
+  }
+  return events;
+}
+
+function icsText(prop) {
+  return prop ? prop.value.replace(/\\n/gi, ' ').replace(/\\([,;\\])/g, '$1').trim() : '';
+}
+
+// "20261019T083000Z" (UTC), "20261019T083000" (lokal tid) eller "20261019" (hele dagen)
+function icsDate(prop) {
+  if (!prop) return null;
+  const m = prop.value.trim().match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/);
+  if (!m) return null;
+  if (!m[4]) return { date: `${m[1]}-${m[2]}-${m[3]}`, time: null };
+  const d = m[7]
+    ? new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]))
+    : new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]);
+  return { date: ymd(d), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+}
+
+function icsToItems(events) {
+  const from = addDays(todayStr(), -30), to = addDays(todayStr(), 240);
+  const items = [], seen = new Set();
+  const counts = { total: events.length, timed: 0, allDay: 0, points: 0, repeating: 0, outside: 0 };
+  for (const e of events) {
+    const s = icsDate(e.DTSTART);
+    if (!s) continue;
+    if (e.RRULE) counts.repeating++;
+    if (s.date < from || s.date > to) { counts.outside++; continue; }
+    const en = icsDate(e.DTEND);
+    const item = {
+      type: 'school', title: icsText(e.SUMMARY) || 'Skole', date: s.date,
+      location: icsText(e.LOCATION), description: icsText(e.DESCRIPTION),
+      start: null, end: null,
+    };
+    if (s.time && en && en.time && en.date === s.date && en.time > s.time) {
+      item.start = s.time; item.end = en.time; counts.timed++;
+    } else if (s.time) {
+      item.start = s.time; counts.points++;   // tidspunkt uden varighed, fx en afleveringsfrist
+    } else {
+      counts.allDay++;
+    }
+    let id = `imp:${e.UID ? e.UID.value : item.title}:${s.date}${s.time || ''}`;
+    while (seen.has(id)) id += '+';
+    seen.add(id);
+    items.push({ id, ...item });
+  }
+  return { items, counts };
+}
+
+async function refreshIcal({ silent = false } = {}) {
+  const url = (data.settings.icalUrl || '').trim().replace(/^webcal:\/\//i, 'https://');
+  if (!url) return;
+  const proxy = (data.settings.icalProxy || '').trim();
+  const target = proxy ? proxy + encodeURIComponent(url) : url;
+  if (!silent) toast('Henter skema…');
+  try {
+    const res = await fetch(target, { cache: 'no-store' });
+    if (!res.ok) throw Object.assign(new Error(`Serveren svarede ${res.status}`), { kind: 'http' });
+    const text = await res.text();
+    if (!text.includes('BEGIN:VCALENDAR')) throw Object.assign(new Error('Svaret var ikke en kalender'), { kind: 'format' });
+    const { items, counts } = icsToItems(parseIcs(text));
+    data.imported = items;
+    data.hiddenImports = data.hiddenImports.filter(id => items.some(i => i.id === id));
+    data.importMeta = { lastFetch: new Date().toISOString(), ok: true, error: null, counts, viaProxy: !!proxy };
+    save(); render();
+    if (!silent) toast(`Skema hentet: ${items.length} punkter`);
+  } catch (e) {
+    const blocked = !e.kind && navigator.onLine !== false; // fetch afvist af browseren
+    data.importMeta = { ...data.importMeta, ok: false, lastTry: new Date().toISOString(),
+      error: blocked ? 'blocked' : (navigator.onLine === false ? 'offline' : e.message) };
+    save(); render();
+    if (!silent) toast('Kunne ikke hente skemaet – se under Mere');
+  }
+}
+
+function importStatusHtml() {
+  const m = data.importMeta;
+  if (!data.settings.icalUrl) return '';
+  if (m.ok === false) {
+    if (m.error === 'blocked') {
+      return `<div class="card load over small"><b>Blokeret.</b> Telefonen fik ikke lov til at hente linket direkte fra itslearning.
+        Det betyder, at vi skal bruge en lille hente-tjeneste. Skriv <b>"blokeret"</b> til Claude, så sætter vi den op.</div>`;
+    }
+    if (m.error === 'offline') return `<div class="card load tight small">Du er offline. Prøv igen, når du har net.</div>`;
+    return `<div class="card load over small"><b>Fejl:</b> ${esc(m.error)}. Tjek at linket er kopieret helt.</div>`;
+  }
+  if (m.ok && m.counts) {
+    const c = m.counts;
+    const when = new Date(m.lastFetch);
+    const n = data.imported.length;
+    let h = `<div class="card load ok small"><b>Virker${m.viaProxy ? ' (via hente-tjeneste)' : ''}.</b>
+      Sidst hentet ${shortDate(ymd(when))} kl. ${pad(when.getHours())}:${pad(when.getMinutes())}.<br>
+      ${n} punkter: ${c.timed} med start/slut, ${c.allDay} hele dage, ${c.points} med kun et tidspunkt.
+      ${c.repeating ? `<br>Bemærk: ${c.repeating} gentagne begivenheder vises kun første gang endnu.` : ''}</div>`;
+    if (n && data.templates.some(t => t.type === 'school')) {
+      h += `<button class="btn block" data-action="removeSchoolTemplates">Fjern faste undervisningspunkter (skemaet kommer nu fra itslearning)</button>`;
+    }
+    return h;
+  }
+  return '';
 }
 
 // ============ 7. Knapper og opstart ============
@@ -735,6 +897,41 @@ const actions = {
 
   backup: () => exportBackup(),
   restore: () => $('#importFile').click(),
+
+  icalFetch: () => {
+    const inp = $('#icalUrl');
+    if (inp) data.settings.icalUrl = inp.value.trim();
+    const px = $('#icalProxy');
+    if (px) data.settings.icalProxy = px.value.trim();
+    if (!data.settings.icalUrl) { toast('Indsæt først dit kalenderlink'); return; }
+    save();
+    refreshIcal();
+  },
+  icalClear: () => {
+    if (!confirm('Fjern det importerede skema fra appen? (Linket bliver også slettet.)')) return;
+    data.imported = []; data.hiddenImports = []; data.settings.icalUrl = '';
+    data.importMeta = defaultData().importMeta;
+    save(); render();
+  },
+  impSkip: el => {
+    data.hiddenImports.push(el.dataset.imp);
+    save(); closeSheet(); render(); toast('Skjult denne gang');
+  },
+  impToTask: el => {
+    const im = data.imported.find(x => x.id === el.dataset.imp);
+    if (!im) return;
+    const t = { id: uid(), title: im.title, subject: '', deadline: im.date, size: 'M', hours: SIZES.M,
+      important: false, doneHours: 0, done: false, createdAt: todayStr() };
+    data.tasks.push(t);
+    data.hiddenImports.push(im.id);
+    save(); render();
+    openForm({ type: 'task', mode: 'task', item: t });   // så du kan rette fag og estimat
+  },
+  removeSchoolTemplates: () => {
+    if (!confirm('Fjern alle faste "Skole"-punkter? Fodbold og andre faste punkter bliver.')) return;
+    data.templates = data.templates.filter(t => t.type !== 'school');
+    save(); render(); toast('Faste undervisningspunkter fjernet');
+  },
 };
 
 document.addEventListener('click', ev => {
@@ -754,7 +951,7 @@ document.addEventListener('change', ev => {
   if (el.name === 'kind' && $('#f')) $('#f').dataset.kind = el.value;
   if (el.dataset && el.dataset.setting) {
     const key = el.dataset.setting;
-    data.settings[key] = key === 'overhead' ? Math.max(0, parseFloat(el.value) || 0) : el.value;
+    data.settings[key] = key === 'overhead' ? Math.max(0, parseFloat(el.value) || 0) : el.value.trim();
     save(); toast('Gemt');
   }
   if (el.id === 'importFile' && el.files[0]) {
@@ -764,7 +961,18 @@ document.addEventListener('change', ev => {
 });
 
 // Opdater når appen åbnes igen (fx næste dag)
-document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#sheet').hidden) render(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if ($('#sheet').hidden) render();
+  autoRefreshIcal();
+});
+
+// Hent skemaet igen, hvis det er mere end 6 timer siden
+function autoRefreshIcal() {
+  if (!data.settings.icalUrl) return;
+  const last = data.importMeta.lastFetch ? new Date(data.importMeta.lastFetch) : null;
+  if (!last || Date.now() - last.getTime() > 6 * 3600 * 1000) refreshIcal({ silent: true });
+}
 
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
@@ -772,3 +980,4 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 }
 
 render();
+autoRefreshIcal();
