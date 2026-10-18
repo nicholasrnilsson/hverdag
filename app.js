@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.2 – itslearning-import';
+const APP_VERSION = '1.3 – itslearning-import';
 
 // Opgavestørrelser i timer
 const SIZES = { S: 1, M: 3, L: 8, XL: 15 };
@@ -761,7 +761,9 @@ function icsToItems(events) {
 async function refreshIcal({ silent = false } = {}) {
   const url = (data.settings.icalUrl || '').trim().replace(/^webcal:\/\//i, 'https://');
   if (!url) return;
-  const proxy = (data.settings.icalProxy || '').trim();
+  let proxy = (data.settings.icalProxy || '').trim();
+  if (proxy && !/^https?:\/\//i.test(proxy)) proxy = 'https://' + proxy;
+  if (proxy && !proxy.includes('?')) proxy = proxy.replace(/\/+$/, '') + '/?url=';
   const target = proxy ? proxy + encodeURIComponent(url) : url;
   if (!silent) toast('Henter skema…');
   try {
