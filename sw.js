@@ -1,6 +1,6 @@
 // Service worker: gør at appen åbner uden internet.
 // Strategi: hent altid nyeste version når der er net, ellers brug den gemte kopi.
-const CACHE = 'hverdag-v5';
+const CACHE = 'hverdag-v6';
 const FILES = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 

@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.4 – itslearning-import';
+const APP_VERSION = '1.5';
 
 // Opgavestørrelser i timer
 const SIZES = { S: 1, M: 3, L: 8, XL: 15 };
@@ -179,6 +179,27 @@ function itemsForDate(date) {
     }
   }
   return out.sort((a, b) => (a.start || '00:00').localeCompare(b.start || '00:00'));
+}
+
+// Aflyste faste punkter og skjulte itslearning-punkter (vises nedtonet, kan gendannes)
+function cancelledForDate(date) {
+  const wd = isoWeekday(date);
+  const out = [];
+  for (const t of data.templates) {
+    if (t.weekday === wd && (t.skip || []).includes(date)) out.push({ ...t, templateId: t.id, date, source: 'template' });
+  }
+  for (const im of data.imported) {
+    if (im.date === date && data.hiddenImports.includes(im.id)) out.push({ ...im, source: 'import' });
+  }
+  return out;
+}
+function cancelledRow(i, mini) {
+  const attrs = i.source === 'template'
+    ? `data-action="unskip" data-tpl="${i.templateId}" data-date="${i.date}"`
+    : `data-action="unhide" data-imp="${esc(i.id)}"`;
+  return `<button class="${mini ? 'mini' : 'item'} cancelled" ${attrs}>
+    <span class="time">${timeLabel(i)}</span>
+    <span class="what"><s>${esc(itemLabel(i))}</s> <span class="tag">aflyst · tryk for at gendanne</span></span></button>`;
 }
 
 // Ledig tid på en dag (i dag: kun resten af dagen)
@@ -400,7 +421,9 @@ function renderToday() {
 
   let h = backupBanner() + loadCard(L);
   h += `<h2>Program</h2>`;
+  const cancelledToday = cancelledForDate(t);
   h += items.length ? items.map(itemRow).join('') : `<div class="empty">Intet planlagt i dag.</div>`;
+  h += cancelledToday.map(i => cancelledRow(i, false)).join('');
   h += `<h2>Skolearbejde i dag ${totalToday > 0 ? '≈ ' + fmtH(totalToday) : ''}</h2>`;
   if (!focus.length) {
     h += `<div class="empty">Ingen åbne opgaver. Tryk + for at tilføje en.</div>`;
@@ -431,6 +454,7 @@ function renderWeek() {
       ${deadlines.map(t => `<button class="deadline-chip" style="border:0" data-action="editTask" data-id="${t.id}">Deadline: ${esc(t.title)}</button>`).join('')}
       ${items.map(i => `<button class="mini t-${i.type}" ${itemAttrs(i)} style="border-left-color:var(--${i.type})">
           <span class="time">${timeLabel(i)}</span><span>${esc(itemLabel(i))}${i.done ? ' ✓' : ''}</span></button>`).join('')}
+      ${cancelledForDate(d).map(i => cancelledRow(i, true)).join('')}
       ${!items.length && !deadlines.length ? '<div class="small muted" style="padding-top:4px">Fri</div>' : ''}
     </div>`;
   }
@@ -817,11 +841,13 @@ function importStatusHtml() {
 }
 
 // ============ 7. Knapper og opstart ============
-function toast(msg) {
+function toast(msg, undo) {
   const t = $('#toast');
-  t.textContent = msg; t.hidden = false;
+  toast._undo = undo || null;
+  t.innerHTML = esc(msg) + (undo ? ' <button class="toast-undo" data-action="toastUndo">Fortryd</button>' : '');
+  t.hidden = false;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { t.hidden = true; }, 1800);
+  toast._t = setTimeout(() => { t.hidden = true; toast._undo = null; }, undo ? 6000 : 1800);
 }
 
 const actions = {
@@ -852,7 +878,8 @@ const actions = {
   },
   doneTask: el => {
     const t = data.tasks.find(x => x.id === el.dataset.id);
-    t.done = true; t.doneAt = todayStr(); save(); render(); toast('Godt gået ✓');
+    t.done = true; t.doneAt = todayStr(); save(); render();
+    toast('Godt gået ✓', () => { t.done = false; delete t.doneAt; });
   },
   undoTask: el => { const t = data.tasks.find(x => x.id === el.dataset.id); t.done = false; delete t.doneAt; save(); render(); },
 
@@ -860,14 +887,18 @@ const actions = {
   editEvent: el => { const e = data.events.find(x => x.id === el.dataset.id); if (e) openForm({ type: e.type, mode: 'event', item: e }); },
   deleteEvent: el => {
     if (!confirm('Slet dette punkt?')) return;
+    const removed = data.events.find(x => x.id === el.dataset.id);
     data.events = data.events.filter(x => x.id !== el.dataset.id);
-    save(); closeSheet(); render(); toast('Slettet');
+    save(); closeSheet(); render();
+    toast('Slettet', () => { data.events.push(removed); });
   },
   toggleDone: el => { const e = data.events.find(x => x.id === el.dataset.id); e.done = !e.done; save(); closeSheet(); render(); },
   skipOnce: el => {
     const t = data.templates.find(x => x.id === el.dataset.tpl);
-    t.skip = [...(t.skip || []), el.dataset.date];
-    save(); closeSheet(); render(); toast('Aflyst denne gang');
+    const date = el.dataset.date;
+    t.skip = [...(t.skip || []), date];
+    save(); closeSheet(); render();
+    toast('Aflyst denne gang', () => { t.skip = t.skip.filter(d => d !== date); });
   },
   moveOnce: el => {
     // Laver en kopi som enkeltstående punkt og aflyser det faste punkt den dag
@@ -918,9 +949,26 @@ const actions = {
     data.importMeta = defaultData().importMeta;
     save(); render();
   },
+  toastUndo: () => {
+    if (!toast._undo) return;
+    toast._undo(); toast._undo = null;
+    save(); render(); toast('Fortrudt');
+  },
+  unskip: el => {
+    const t = data.templates.find(x => x.id === el.dataset.tpl);
+    if (!t) return;
+    t.skip = (t.skip || []).filter(d => d !== el.dataset.date);
+    save(); render(); toast('Gendannet');
+  },
+  unhide: el => {
+    data.hiddenImports = data.hiddenImports.filter(x => x !== el.dataset.imp);
+    save(); render(); toast('Gendannet');
+  },
   impSkip: el => {
-    data.hiddenImports.push(el.dataset.imp);
-    save(); closeSheet(); render(); toast('Skjult denne gang');
+    const id = el.dataset.imp;
+    data.hiddenImports.push(id);
+    save(); closeSheet(); render();
+    toast('Aflyst denne gang', () => { data.hiddenImports = data.hiddenImports.filter(x => x !== id); });
   },
   impToTask: el => {
     const im = data.imported.find(x => x.id === el.dataset.imp);

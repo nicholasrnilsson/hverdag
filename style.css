@@ -207,3 +207,10 @@ form[data-kind="rest"] .timefields { display: none; }
 
 details summary { cursor: pointer; padding: 6px 0; }
 details[open] summary { margin-bottom: 4px; }
+
+/* Aflyste punkter og fortryd */
+.cancelled { opacity: .55; box-shadow: none; background: transparent; border-left-style: dashed !important; }
+.cancelled s { color: var(--muted); }
+.toast-undo { background: none; border: 0; color: var(--accent); font-weight: 700; margin-left: 10px; padding: 0; font-size: 14px; }
+#toast { display: flex; align-items: center; }
+#toast[hidden] { display: none; }
