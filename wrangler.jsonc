@@ -1,0 +1,8 @@
+// Fortæller Cloudflare, at hente-tjenesten ligger i hente-tjeneste/worker.js
+// (resten af repoet er selve appen, som GitHub Pages viser)
+{
+  "name": "hverdag-hent",
+  "main": "hente-tjeneste/worker.js",
+  "compatibility_date": "2025-01-01",
+  "workers_dev": true
+}
