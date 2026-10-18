@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f3ee" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#15171b" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Hverdag">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+  <title>Hverdag</title>
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">I dag</h1>
+    <div id="subtitle" class="muted"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <button id="fab" data-action="openAdd" aria-label="Tilføj">+</button>
+
+  <nav class="tabs">
+    <button data-action="tab" data-tab="today">I dag</button>
+    <button data-action="tab" data-tab="week">Uge</button>
+    <button data-action="tab" data-tab="tasks">Opgaver</button>
+    <button data-action="tab" data-tab="more">Mere</button>
+  </nav>
+
+  <div id="backdrop" data-action="closeSheet" hidden></div>
+  <section id="sheet" hidden></section>
+  <div id="toast" hidden></div>
+  <input type="file" id="importFile" accept="application/json,.json" hidden>
+
+  <script src="app.js"></script>
+</body>
+</html>
