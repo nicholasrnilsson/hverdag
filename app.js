@@ -15,10 +15,20 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';
 
 // Opgavestørrelser i timer
-const SIZES = { S: 1, M: 3, L: 8, XL: 15 };
+const SIZES = { XS: 0.5, S: 1, M: 3, L: 8, XL: 15 };
+
+// Slags skolearbejde. "Lektier" (læs/lav/forbered) hører til en bestemt undervisningsgang,
+// en aflevering har en frist.
+const TASK_KINDS = {
+  aflevering: { label: 'Aflevering',   size: 'L',  ph: 'fx Rapport om værdikæder' },
+  laes:       { label: 'Læs',          size: 'S',  ph: 'fx Kapitel 4, s. 80–112' },
+  lav:        { label: 'Lav',          size: 'S',  ph: 'fx Opgave 3.1–3.5' },
+  forbered:   { label: 'Forberedelse', size: 'S',  ph: 'fx Forbered case til gruppearbejde' },
+};
+const isHomework = t => t.kind !== 'aflevering';
 
 // Grænser for ugebelastning: hvor stor en del af den ledige tid skolen kræver
 const LOAD_OK = 0.5;    // op til 50 % → grøn
@@ -67,7 +77,7 @@ function migrate(d) {
   return {
     ...def, ...d,
     events: Array.isArray(d.events) ? d.events : [],
-    tasks: Array.isArray(d.tasks) ? d.tasks : [],
+    tasks: (Array.isArray(d.tasks) ? d.tasks : []).map(t => ({ kind: 'lav', ...t })),
     templates: Array.isArray(d.templates) ? d.templates : def.templates,
     imported: Array.isArray(d.imported) ? d.imported : [],
     importMeta: { ...def.importMeta, ...(d.importMeta || {}) },
@@ -387,12 +397,13 @@ function taskCard(t, opts = {}) {
   const pct = t.hours > 0 ? Math.min(100, Math.round(((t.doneHours || 0) / t.hours) * 100)) : 0;
   const dueCls = overdue ? 'due-over' : soon ? 'due-soon' : '';
   const extra = opts.todayH ? ` · <b>≈ ${fmtH(opts.todayH)} i dag</b>` : '';
-  return `<div class="card task-card ${overdue ? 'overdue' : ''}">
+  return `<div class="card task-card k-${t.kind || 'lav'} ${overdue ? 'overdue' : ''}">
     <div class="task-top">
+      <span class="kind-tag k-${t.kind || 'lav'}">${taskKindLabel(t)}</span>
       <button class="title" data-action="editTask" data-id="${t.id}">${esc(t.title)}</button>
       ${t.important ? '<span class="tag lock">vigtig</span>' : ''}
     </div>
-    <div class="task-meta small muted">${t.subject ? esc(t.subject) + ' · ' : ''}<span class="${dueCls}">Deadline ${shortDate(t.deadline)} (${relDays(t.deadline)})</span>${extra}</div>
+    <div class="task-meta small muted">${t.subject && !(t.forClass && t.forClass.title === t.subject) ? esc(t.subject) + ' · ' : ''}<span class="${dueCls}">${dueText(t)} (${relDays(t.deadline)})</span>${extra}</div>
     ${t.done ? '' : `<div class="progress"><div style="width:${pct}%"></div></div>`}
     <div class="task-actions">
       <span class="grow small muted">${t.done ? 'Færdig' : `${fmtH(t.doneHours || 0)} af ${fmtH(t.hours)}`}</span>
@@ -451,7 +462,8 @@ function renderWeek() {
     h += `<div class="day ${d === today ? 'today' : ''} ${d < today ? 'past' : ''}">
       <div class="day-head"><b>${shortDate(d)}</b><span class="small muted">${booked ? fmtH(booked) + ' booket' : ''}</span>
         <button class="day-add" data-action="openAdd" data-date="${d}" aria-label="Tilføj">+</button></div>
-      ${deadlines.map(t => `<button class="deadline-chip" style="border:0" data-action="editTask" data-id="${t.id}">Deadline: ${esc(t.title)}</button>`).join('')}
+      ${deadlines.filter(t => !isHomework(t)).map(t => `<button class="deadline-chip" style="border:0" data-action="editTask" data-id="${t.id}">Aflevering: ${esc(t.title)}${t.dueTime ? ' kl. ' + t.dueTime : ''}</button>`).join('')}
+      ${deadlines.filter(isHomework).map(t => `<button class="hw-chip" data-action="editTask" data-id="${t.id}">${taskKindLabel(t)}: ${esc(t.title)}</button>`).join('')}
       ${items.map(i => `<button class="mini t-${i.type}" ${itemAttrs(i)} style="border-left-color:var(--${i.type})">
           <span class="time">${timeLabel(i)}</span><span>${esc(itemLabel(i))}${i.done ? ' ✓' : ''}</span></button>`).join('')}
       ${cancelledForDate(d).map(i => cancelledRow(i, true)).join('')}
@@ -464,16 +476,20 @@ function renderWeek() {
 function renderTasks() {
   const today = todayStr(), weekEnd = addDays(mondayOf(today), 6);
   setHeader('Opgaver', `${openTasks().length} åbne`);
-  const open = openTasks().sort(sortTasks);
+  const f = state.taskFilter || 'all';
+  const match = t => f === 'all' || (f === 'hand' ? !isHomework(t) : isHomework(t));
+  const open = openTasks().filter(match).sort(sortTasks);
+  let filterBar = `<div class="chips" style="margin:4px 0 6px">${[['all', 'Alle'], ['hand', 'Afleveringer'], ['hw', 'Lektier']].map(([k, l]) =>
+    `<button class="chipbtn ${f === k ? 'on' : ''}" data-action="taskFilter" data-f="${k}">${l} (${openTasks().filter(t => k === 'all' || (k === 'hand' ? !isHomework(t) : isHomework(t))).length})</button>`).join('')}</div>`;
   const groups = [
     ['Over deadline', open.filter(t => t.deadline < today)],
     ['Denne uge', open.filter(t => t.deadline >= today && t.deadline <= weekEnd)],
     ['Senere', open.filter(t => t.deadline > weekEnd)],
   ];
-  let h = '';
+  let h = filterBar;
   for (const [name, list] of groups) if (list.length) h += `<h2>${name}</h2>` + list.map(t => taskCard(t)).join('');
   if (!open.length) h += `<div class="empty">Ingen åbne opgaver. Tryk + for at tilføje en.</div>`;
-  const done = data.tasks.filter(t => t.done).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')).slice(0, 8);
+  const done = data.tasks.filter(t => t.done && match(t)).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')).slice(0, 8);
   if (done.length) h += `<h2>Senest færdige</h2>` + done.map(t => taskCard(t)).join('');
   return h;
 }
@@ -561,6 +577,27 @@ function timeFields(v, defStart, defEnd, durs) {
   </div>`;
 }
 
+function upcomingClasses(n = 10) {
+  const today = todayStr(), now = nowMin(), out = [];
+  for (let d = today; d <= addDays(today, 21) && out.length < n; d = addDays(d, 1)) {
+    for (const i of itemsForDate(d)) {
+      if (i.type !== 'school' || !i.start || !i.end) continue;   // kun rigtige undervisningsgange, ikke frister
+      if (d === today && toMin(i.start) <= now) continue;
+      out.push({ date: d, start: i.start, title: i.title || 'Undervisning' });
+      if (out.length >= n) break;
+    }
+  }
+  return out;
+}
+function taskKindLabel(t) { return (TASK_KINDS[t.kind] || TASK_KINDS.lav).label; }
+function dueText(t) {
+  if (isHomework(t)) {
+    const to = t.forClass ? `Til ${esc(t.forClass.title)} · ` : 'Til ';
+    return `${to}${shortDate(t.deadline)}${t.forClass && t.forClass.start ? ' kl. ' + t.forClass.start : ''}`;
+  }
+  return `Frist ${shortDate(t.deadline)}${t.dueTime ? ' kl. ' + t.dueTime : ''}`;
+}
+
 function recentSubjects() {
   const seen = [];
   for (const t of [...data.tasks].reverse()) if (t.subject && !seen.includes(t.subject)) seen.push(t.subject);
@@ -576,19 +613,29 @@ function formHtml() {
     const types = mode === 'template' ? ['school', 'training', 'shift', 'social'] : ['task', 'training', 'shift', 'social', 'school'];
     h += `<div class="chips typechips">${types.map(t => `<button type="button" class="chipbtn ${t === type ? 'on' : ''}" data-action="formType" data-type="${t}">${TYPES[t]}</button>`).join('')}</div>`;
   }
-  h += `<form id="f" data-type="${type}" data-kind="${esc(v.kind || 'run')}" autocomplete="off">`;
+  h += `<form id="f" data-type="${type}" data-kind="${esc(v.kind || 'run')}" data-tkind="${esc(type === 'task' ? (v.kind || data.settings.lastTaskKind || 'laes') : '')}" autocomplete="off">`;
 
   if (type === 'task') {
-    const size = v.size || 'M';
+    const tk = v.kind || data.settings.lastTaskKind || 'laes';
+    const size = v.size || TASK_KINDS[tk].size;
     const subs = recentSubjects();
-    h += field('Hvad skal laves?', input('title', 'text', v.title, 'required placeholder="fx Rapport om værdikæder"'));
+    const classes = upcomingClasses();
+    h += field('Hvilken slags?', `<div class="chips">${Object.entries(TASK_KINDS).map(([k, o]) => chipRadio('tkind', k, o.label, tk === k)).join('')}</div>`);
+    h += field('Hvad skal laves?', input('title', 'text', v.title, `required placeholder="${TASK_KINDS[tk].ph}"`));
+    h += `<div class="only-hw">${field('Til hvilken undervisning?',
+      (classes.length
+        ? `<div class="chips">${classes.map(c => `<button type="button" class="chipbtn ${v.forClass && v.forClass.date === c.date && v.forClass.start === c.start ? 'on' : ''}" data-action="pickClass" data-date="${c.date}" data-start="${c.start}" data-title="${esc(c.title)}">${DAYS_SHORT[isoWeekday(c.date) - 1]} ${parseYmd(c.date).getDate()}/${parseYmd(c.date).getMonth() + 1} · ${esc(c.title.length > 26 ? c.title.slice(0, 25) + '…' : c.title)}</button>`).join('')}</div>`
+        : '<div class="small muted">Ingen kommende undervisning fundet – vælg en dato herunder.</div>')
+      + `<input type="hidden" name="forClass" value="${esc(v.forClass ? JSON.stringify(v.forClass) : '')}">`)}</div>`;
     h += field('Fag', input('subject', 'text', v.subject, 'placeholder="fx VCM"') +
       (subs.length ? `<div class="chips" style="margin-top:8px">${subs.map(s => `<button type="button" class="chipbtn" data-action="pickSubject" data-value="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''));
-    h += field('Deadline', input('deadline', 'date', v.deadline || addDays(todayStr(), 7), 'required'));
+    h += `<div class="row2">${field('<span class="only-hw">Dato for undervisningen</span><span class="only-hand">Afleveringsfrist</span>',
+        input('deadline', 'date', v.deadline || (tk === 'aflevering' ? addDays(todayStr(), 7) : (classes[0] ? classes[0].date : addDays(todayStr(), 1))), 'required'))}
+      <div class="only-hand">${field('Kl. (valgfri)', input('dueTime', 'time', v.dueTime || ''))}</div></div>`;
     h += field('Hvor stor? (estimat)', `<div class="chips">${Object.entries(SIZES).map(([k, hrs]) => chipRadio('size', k, `${k} · ${hrs} t`, size === k)).join('')}</div>`);
     h += `<div class="row2">${field('Timer i alt', input('hours', 'number', v.hours ?? SIZES[size], 'step="0.5" min="0.5" inputmode="decimal"'))}
       ${editing ? field('Allerede brugt', input('doneHours', 'number', v.doneHours || 0, 'step="0.5" min="0" inputmode="decimal"')) : '<div></div>'}</div>`;
-    h += `<label class="check"><input type="checkbox" name="important" ${v.important ? 'checked' : ''}> Vigtig (tæller til karakter/eksamen)</label>`;
+    h += `<label class="check"><input type="checkbox" name="important" ${(editing ? v.important : tk === 'aflevering') ? 'checked' : ''}> Vigtig (tæller til karakter/eksamen)</label>`;
   }
 
   if (type === 'training') {
@@ -637,12 +684,19 @@ function submitForm(form) {
 
   if (type === 'task') {
     const hours = parseFloat(g('hours').replace(',', '.'));
+    const kind = g('tkind') || 'lav';
+    let forClass = null;
+    try { forClass = g('forClass') ? JSON.parse(g('forClass')) : null; } catch { forClass = null; }
     const obj = {
-      title: g('title'), subject: g('subject'), deadline: g('deadline'),
+      kind, title: g('title'), subject: g('subject'), deadline: g('deadline'),
       size: g('size') || 'M', hours: hours > 0 ? hours : SIZES[g('size') || 'M'],
       important: fd.get('important') === 'on',
+      dueTime: kind === 'aflevering' ? g('dueTime') : '',
+      // Undervisningsgangen gælder kun, hvis datoen ikke er ændret bagefter
+      forClass: kind !== 'aflevering' && forClass && forClass.date === g('deadline') ? forClass : null,
     };
     if (!obj.title || !obj.deadline) return;
+    data.settings.lastTaskKind = kind;
     if (item) {
       const dh = parseFloat(g('doneHours').replace(',', '.'));
       Object.assign(item, obj, { doneHours: dh >= 0 ? dh : item.doneHours || 0 });
@@ -866,6 +920,15 @@ const actions = {
     f.elements.end.value = fromMin(toMin(f.elements.start.value) + Number(el.dataset.min));
     el.parentElement.querySelectorAll('.chipbtn').forEach(b => b.classList.toggle('on', b === el));
   },
+  pickClass: el => {
+    const f = $('#f');
+    const c = { date: el.dataset.date, start: el.dataset.start, title: el.dataset.title };
+    f.elements.deadline.value = c.date;
+    f.elements.forClass.value = JSON.stringify(c);
+    if (!f.elements.subject.value) f.elements.subject.value = c.title;
+    el.parentElement.querySelectorAll('.chipbtn').forEach(b => b.classList.toggle('on', b === el));
+  },
+  taskFilter: el => { state.taskFilter = el.dataset.f; render(); },
   pickSubject: el => { $('#f').elements.subject.value = el.dataset.value; },
   pickTitle: el => { $('#f').elements.title.value = el.dataset.value; },
 
@@ -973,10 +1036,15 @@ const actions = {
   impToTask: el => {
     const im = data.imported.find(x => x.id === el.dataset.imp);
     if (!im) return;
-    const t = { id: uid(), title: im.title, subject: '', deadline: im.date, size: 'M', hours: SIZES.M,
-      important: false, doneHours: 0, done: false, createdAt: todayStr() };
+    const hand = /aflever|frist|deadline|upload|eksamen/i.test(im.title + ' ' + (im.description || ''));
+    const t = hand
+      ? { id: uid(), kind: 'aflevering', title: im.title, subject: '', deadline: im.date, dueTime: im.start || '',
+          size: 'L', hours: SIZES.L, important: true, doneHours: 0, done: false, createdAt: todayStr() }
+      : { id: uid(), kind: 'forbered', title: im.title, subject: im.title, deadline: im.date,
+          forClass: { date: im.date, start: im.start, title: im.title },
+          size: 'S', hours: SIZES.S, important: false, doneHours: 0, done: false, createdAt: todayStr() };
     data.tasks.push(t);
-    data.hiddenImports.push(im.id);
+    if (hand) data.hiddenImports.push(im.id);   // en afleveringsfrist vises nu som opgave i stedet
     save(); render();
     openForm({ type: 'task', mode: 'task', item: t });   // så du kan rette fag og estimat
   },
@@ -1002,6 +1070,16 @@ document.addEventListener('change', ev => {
   const el = ev.target;
   if (el.name === 'size' && $('#f')) $('#f').elements.hours.value = SIZES[el.value];
   if (el.name === 'kind' && $('#f')) $('#f').dataset.kind = el.value;
+  if (el.name === 'tkind' && $('#f')) {
+    const f = $('#f'), k = TASK_KINDS[el.value];
+    f.dataset.tkind = el.value;
+    f.elements.title.placeholder = k.ph;
+    if (!formCtx.item) {   // kun for nye opgaver – rør ikke ved noget, du har rettet
+      const sizeInput = f.querySelector(`input[name=size][value=${k.size}]`);
+      if (sizeInput) { sizeInput.checked = true; f.elements.hours.value = SIZES[k.size]; }
+      f.elements.important.checked = el.value === 'aflevering';
+    }
+  }
   if (el.dataset && el.dataset.setting) {
     const key = el.dataset.setting;
     data.settings[key] = key === 'overhead' ? Math.max(0, parseFloat(el.value) || 0) : el.value.trim();

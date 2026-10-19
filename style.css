@@ -214,3 +214,17 @@ details[open] summary { margin-bottom: 4px; }
 .toast-undo { background: none; border: 0; color: var(--accent); font-weight: 700; margin-left: 10px; padding: 0; font-size: 14px; }
 #toast { display: flex; align-items: center; }
 #toast[hidden] { display: none; }
+
+/* Slags skolearbejde */
+:root { --hw: #0f8f9a; }
+@media (prefers-color-scheme: dark) { :root { --hw: #3cc3cf; } }
+.task-card.k-laes, .task-card.k-lav, .task-card.k-forbered { border-left-color: var(--hw); }
+.task-card.k-laes .progress > div, .task-card.k-lav .progress > div, .task-card.k-forbered .progress > div { background: var(--hw); }
+.task-card.overdue { border-left-color: var(--over); }
+.kind-tag { flex: none; font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 6px; align-self: center;
+  color: var(--hw); background: color-mix(in srgb, var(--hw) 14%, transparent); }
+.kind-tag.k-aflevering { color: var(--task); background: color-mix(in srgb, var(--task) 15%, transparent); }
+.hw-chip { display: inline-block; margin-top: 6px; margin-right: 6px; font-size: 13px; font-weight: 600; border: 0;
+  color: var(--hw); background: color-mix(in srgb, var(--hw) 13%, transparent); padding: 2px 8px; border-radius: 6px; }
+form[data-tkind="aflevering"] .only-hw { display: none; }
+form[data-tkind="laes"] .only-hand, form[data-tkind="lav"] .only-hand, form[data-tkind="forbered"] .only-hand { display: none; }

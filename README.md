@@ -29,6 +29,6 @@ Grænserne kan justeres øverst i `app.js` (`LOAD_OK`, `LOAD_TIGHT`, `SIZES`).
 
 1. ✅ MVP: I dag, uge, opgaver, faste ugepunkter, ugebelastning, backup
 2. ✅ Import af VIA-skema fra itslearning (Garmin-plan kommer senere)
-3. Planlægger: forslag til skoleblokke, delopgaver, konflikter (fx langtur før deadline)
+3. (Delvist) Opgavetyper: aflevering, læs, lav, forberedelse ✅ – planlægger: forslag til skoleblokke, delopgaver, konflikter (fx langtur før deadline)
 4. Sociale planer med advarsel + søndagsgennemgang
 5. Synk til Mac, notifikationer
