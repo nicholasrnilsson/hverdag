@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.6';
+const APP_VERSION = '1.7';
 
 // Opgavestørrelser i timer
 const SIZES = { XS: 0.5, S: 1, M: 3, L: 8, XL: 15 };
@@ -217,18 +217,19 @@ function dayCapacity(date) {
   const s = data.settings;
   const dayS = toMin(s.dayStart), dayE = toMin(s.dayEnd);
   const from = date === todayStr() ? Math.max(dayS, nowMin()) : dayS;
-  if (from >= dayE || dayE <= dayS) return { awake: 0, booked: 0, free: 0 };
+  if (from >= dayE || dayE <= dayS) return { awake: 0, booked: 0, free: 0, byType: {} };
   const fraction = (dayE - from) / (dayE - dayS);
   const awake = (dayE - from) / 60 - Number(s.overhead || 0) * fraction;
   let booked = 0;
+  const byType = {};
   for (const i of itemsForDate(date)) {
     if (!hasTime(i)) continue;
     let a = toMin(i.start), b = toMin(i.end);
     if (b <= a) b = dayE;               // går over midnat → tæl til dagens slut
     a = Math.max(a, from); b = Math.min(b, dayE);
-    if (b > a) booked += (b - a) / 60;
+    if (b > a) { booked += (b - a) / 60; byType[i.type] = (byType[i.type] || 0) + (b - a) / 60; }
   }
-  return { awake, booked, free: Math.max(0, awake - booked) };
+  return { awake, booked, free: Math.max(0, awake - booked), byType };
 }
 
 function openTasks() { return data.tasks.filter(t => !t.done); }
@@ -255,10 +256,12 @@ function weekLoad(weekStart) {
   const weekEnd = addDays(weekStart, 6);
   if (weekEnd < today) return { past: true };
   const from = weekStart > today ? weekStart : today;
-  let free = 0, booked = 0;
+  let free = 0, booked = 0, awake = 0;
+  const byType = {};
   for (let d = from; d <= weekEnd; d = addDays(d, 1)) {
     const c = dayCapacity(d);
-    free += c.free; booked += c.booked;
+    free += c.free; booked += c.booked; awake += c.awake;
+    for (const [k, v] of Object.entries(c.byType)) byType[k] = (byType[k] || 0) + v;
   }
   const need = needBetween(from, weekEnd);
   const ratio = calcRatio(need, free);
@@ -274,7 +277,7 @@ function weekLoad(weekStart) {
   }
   const level = worst.ratio <= LOAD_OK ? 'ok' : worst.ratio <= LOAD_TIGHT ? 'tight' : 'over';
   const sug = level === 'ok' ? null : suggestMoves(from, worst.end, worst.need, worst.free, level);
-  return { from, weekEnd, free, booked, need, ratio, level, sug, worst };
+  return { from, weekEnd, free, booked, awake, byType, need, ratio, level, sug, worst };
 }
 function calcRatio(need, free) { return need < 0.01 ? 0 : (free > 0 ? need / free : Infinity); }
 function needBetween(a, b) { return openTasks().reduce((s, t) => s + taskShare(t, a, b), 0); }
@@ -355,11 +358,28 @@ function itemRow(i) {
 function loadCard(L) {
   if (L.past) return '';
   const head = { ok: 'Ugen ser fin ud', tight: 'Ugen er stram', over: 'For travl uge' }[L.level];
-  const pct = Math.min(100, Math.round(L.worst.ratio * 100)) || 0;
+  // Bjælken viser al din vågne tid resten af ugen: hvad der er booket, hvad skolearbejdet kræver, og hvad der er tilbage
+  const total = Math.max(L.awake, L.booked + L.need, 0.01);
+  const segs = [
+    ['school', 'Undervisning', L.byType.school || 0],
+    ['shift', 'Arbejde', L.byType.shift || 0],
+    ['training', 'Træning', L.byType.training || 0],
+    ['social', 'Socialt', L.byType.social || 0],
+    ['homework', 'Skolearbejde', L.need],
+    ['free', 'Fri', Math.max(0, L.free - L.need)],
+  ];
+  const bar = segs.filter(x => x[2] > 0.01).map(([k, , v]) => `<div class="seg seg-${k}" style="width:${(v / total * 100).toFixed(2)}%"></div>`).join('');
+  const legend = segs.filter(x => x[2] >= 0.25 || x[0] === 'homework' || x[0] === 'free')
+    .map(([k, l, v]) => `<span class="lg"><i class="dot seg-${k}"></i>${l} <b>${fmtH(v)}</b></span>`).join('');
+  const pct = Math.round(L.worst.ratio * 100) || 0;
   let h = `<div class="card load ${L.level}">
     <div class="headline">${head}</div>
-    <div class="meter"><div style="width:${pct}%"></div></div>
-    <div class="small">Skolearbejde resten af ugen: <b>${fmtH(L.need)}</b> · Ledig tid: <b>${fmtH(L.free)}</b></div>`;
+    <div class="small muted" style="margin-top:2px">Din tid resten af ugen (${fmtH(L.awake)} vågen tid efter mad og transport)</div>
+    <div class="stack">${bar}</div>
+    <div class="legend small">${legend}</div>
+    <div class="small" style="margin-top:6px">${L.need > 0.01
+      ? `${L.worst.deadline && L.worst.ratio > L.ratio ? 'Op til den travleste deadline fylder skolearbejdet' : 'Skolearbejdet fylder'} <b>${Math.min(pct, 999)} %</b> af din ledige tid. Over 50 % bliver ugen gul, over 80 % rød.`
+      : 'Ingen opgaver eller lektier lagt ind for resten af ugen.'}</div>`;
   const W = L.worst;
   if (W && W.deadline && W.ratio > L.ratio) {
     const t = openTasks().filter(x => x.deadline === W.deadline).sort(sortTasks)[0];
