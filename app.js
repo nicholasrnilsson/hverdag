@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.8';
+const APP_VERSION = '1.9';
 
 // Opgavestørrelser i timer
 const SIZES = { XS: 0.5, S: 1, M: 3, L: 8, XL: 15 };
@@ -36,6 +36,7 @@ const LOAD_TIGHT = 0.8; // op til 80 % → gul, derover → rød
 
 const TYPES = {
   task:     'Opgave',
+  study:    'Skolearbejde',
   training: 'Træning',
   shift:    'Vagt',
   social:   'Socialt',
@@ -223,7 +224,7 @@ function dayCapacity(date) {
   let booked = 0;
   const byType = {};
   for (const i of itemsForDate(date)) {
-    if (!hasTime(i)) continue;
+    if (!hasTime(i) || i.type === 'study') continue;   // planlagt skolearbejde er tid til skolen, ikke væk fra den
     let a = toMin(i.start), b = toMin(i.end);
     if (b <= a) b = dayE;               // går over midnat → tæl til dagens slut
     a = Math.max(a, from); b = Math.min(b, dayE);
@@ -242,12 +243,29 @@ function taskWindow(t) {
   const end = addDays(t.deadline, -1);
   return { start: today, end, len: daysBetween(today, end) + 1 };
 }
+// Planlagte arbejdsblokke for en opgave (kun dem, der ikke er overstået eller gennemført)
+function studyBlocks(t) {
+  const today = todayStr(), now = nowMin();
+  return data.events.filter(e => e.type === 'study' && e.taskId === t.id && !e.done && hasTime(e)
+    && e.date >= today && e.date <= t.deadline && !(e.date === today && toMin(e.end) <= now));
+}
+function plannedHours(t, from = '0000-00-00', to = '9999-12-31') {
+  return studyBlocks(t).filter(e => e.date >= from && e.date <= to).reduce((s, e) => s + durH(e.start, e.end), 0);
+}
+
+// Opgavens resterende timer: først lægges de på dine planlagte arbejdsblokke, resten fordeles jævnt
 function taskShare(t, from, to) {
+  const rem = remaining(t);
+  const plannedAll = plannedHours(t);
+  const scale = plannedAll > rem && plannedAll > 0 ? rem / plannedAll : 1;
+  const planned = plannedHours(t, from, to) * scale;
+  const unplanned = Math.max(0, rem - plannedAll);
+  if (unplanned <= 0) return planned;
   const w = taskWindow(t);
   const a = from > w.start ? from : w.start;
   const b = to < w.end ? to : w.end;
-  if (b < a) return 0;
-  return remaining(t) * (daysBetween(a, b) + 1) / w.len;
+  if (b < a) return planned;
+  return planned + unplanned * (daysBetween(a, b) + 1) / w.len;
 }
 
 // Hvor travl er ugen? Sammenligner skolearbejde med ledig tid fra nu og ugen ud
@@ -330,6 +348,7 @@ function render() {
 }
 
 function itemLabel(i) {
+  if (i.type === 'study') return 'Arbejd på: ' + (i.title || 'opgave');
   if (i.type === 'training') {
     const k = KINDS[i.kind] || 'Træning';
     return i.title && i.title !== k ? `${k}: ${i.title}` : k;
@@ -430,9 +449,11 @@ function taskCard(t, opts = {}) {
       <span class="grow small muted">${t.done ? 'Færdig' : `${fmtH(t.doneHours || 0)} af ${fmtH(t.hours)}`}</span>
       ${t.done
         ? `<button class="btn" data-action="undoTask" data-id="${t.id}">Fortryd</button>`
-        : `<button class="btn" data-action="plusHour" data-id="${t.id}">+1 t</button>
+        : `<button class="btn" data-action="planTask" data-id="${t.id}">Planlæg</button>
+           <button class="btn" data-action="plusHour" data-id="${t.id}">+1 t</button>
            <button class="btn primary" data-action="doneTask" data-id="${t.id}">Færdig</button>`}
     </div>
+    ${!t.done && studyBlocks(t).length ? `<div class="small muted" style="margin-top:8px">Planlagt: ${studyBlocks(t).sort((x, y) => (x.date + x.start).localeCompare(y.date + y.start)).map(e => `${shortDate(e.date)} ${e.start}–${e.end}`).join(' · ')}</div>` : ''}
   </div>`;
 }
 
@@ -629,8 +650,10 @@ function formHtml() {
   const { type, mode, item } = formCtx;
   const v = item || {};
   const editing = !!item;
-  let h = `<p class="sheet-title">${editing ? 'Ret' : mode === 'template' ? 'Nyt fast punkt' : 'Tilføj'}${editing ? ' ' + TYPES[type].toLowerCase() : ''}</p>`;
-  if (!editing) {
+  let h = type === 'study'
+    ? `<p class="sheet-title">${editing ? 'Flyt arbejdstid' : 'Planlæg arbejdstid'}</p>`
+    : `<p class="sheet-title">${editing ? 'Ret' : mode === 'template' ? 'Nyt fast punkt' : 'Tilføj'}${editing ? ' ' + TYPES[type].toLowerCase() : ''}</p>`;
+  if (!editing && type !== 'study') {
     const types = mode === 'template' ? ['school', 'training', 'shift', 'social'] : ['task', 'training', 'shift', 'social', 'school'];
     h += `<div class="chips typechips">${types.map(t => `<button type="button" class="chipbtn ${t === type ? 'on' : ''}" data-action="formType" data-type="${t}">${TYPES[t]}</button>`).join('')}</div>`;
   }
@@ -657,6 +680,7 @@ function formHtml() {
     h += `<div class="row2">${field('Timer i alt', input('hours', 'number', v.hours ?? SIZES[size], 'step="0.5" min="0.5" inputmode="decimal"'))}
       ${editing ? field('Allerede brugt', input('doneHours', 'number', v.doneHours || 0, 'step="0.5" min="0" inputmode="decimal"')) : '<div></div>'}</div>`;
     h += `<label class="check"><input type="checkbox" name="important" ${(editing ? v.important : tk === 'aflevering') ? 'checked' : ''}> Vigtig (tæller til karakter/eksamen)</label>`;
+    if (!editing) h += `<label class="check" style="margin-top:12px"><input type="checkbox" name="planNow"> Planlæg hvornår jeg vil arbejde på den</label>`;
   }
 
   if (type === 'training') {
@@ -665,6 +689,16 @@ function formHtml() {
     h += dateOrWeekday(v);
     h += timeFields(v, '17:00', '18:00', [30, 45, 60, 90, 120]);
     h += field('Note (valgfri)', input('title', 'text', v.title && v.title !== KINDS[kind] ? v.title : '', 'placeholder="fx Intervaller 6×800 m"'));
+  }
+
+  if (type === 'study') {
+    const task = data.tasks.find(x => x.id === (v.taskId || formCtx.taskId));
+    h += `<p class="muted" style="margin:0">Opgave: <b>${esc(task ? task.title : v.title)}</b>${task ? ` · frist ${shortDate(task.deadline)}` : ''}</p>`;
+    h += field('Hvornår vil du arbejde på den?', `<div class="chips" style="margin-bottom:8px">${[0, 1, 2, 3, 4, 5, 6].map(n => {
+      const d = addDays(todayStr(), n);
+      return `<button type="button" class="chipbtn" data-action="pickDate" data-date="${d}">${n === 0 ? 'I dag' : n === 1 ? 'I morgen' : DAYS_SHORT[isoWeekday(d) - 1] + ' ' + parseYmd(d).getDate() + '/' + (parseYmd(d).getMonth() + 1)}</button>`;
+    }).join('')}</div>` + input('date', 'date', v.date || formCtx.date || addDays(todayStr(), 1), 'required'));
+    h += timeFields(v, '10:00', '12:00', [60, 120, 180, 240]);
   }
 
   if (type === 'shift') {
@@ -723,12 +757,24 @@ function submitForm(form) {
       const dh = parseFloat(g('doneHours').replace(',', '.'));
       Object.assign(item, obj, { doneHours: dh >= 0 ? dh : item.doneHours || 0 });
     } else {
-      data.tasks.push({ id: uid(), ...obj, doneHours: 0, done: false, createdAt: todayStr() });
+      const nt = { id: uid(), ...obj, doneHours: 0, done: false, createdAt: todayStr() };
+      data.tasks.push(nt);
+      if (fd.get('planNow') === 'on') {
+        save(); render();
+        openForm({ type: 'study', mode: 'event', taskId: nt.id });
+        toast('Opgave gemt – vælg hvornår du vil arbejde på den');
+        return;
+      }
     }
   } else {
     const obj = { type };
     if (type === 'training') obj.kind = g('kind') || 'run';
     obj.title = g('title') || (type === 'training' ? KINDS[obj.kind] : TYPES[type]);
+    if (type === 'study') {
+      obj.taskId = (item && item.taskId) || formCtx.taskId;
+      const task = data.tasks.find(x => x.id === obj.taskId);
+      obj.title = task ? task.title : (item ? item.title : 'Opgave');
+    }
     if (obj.kind === 'rest') { obj.start = null; obj.end = null; }
     else { obj.start = g('start'); obj.end = g('end'); if (!obj.start || !obj.end) return; }
     if (mode === 'template') {
@@ -778,6 +824,11 @@ function openItemSheet(el) {
       <button class="btn block" data-action="skipOnce" data-tpl="${i.templateId}" data-date="${i.date}">Aflys denne gang</button>
       <button class="btn block" data-action="editTemplate" data-id="${i.templateId}">Ret alle uger</button>`;
   } else {
+    if (i.type === 'study' && !i.done) {
+      h += `<button class="btn block primary" data-action="studyDone" data-id="${i.id}">Gennemført (+${fmtH(durH(i.start, i.end))} på opgaven)</button>`;
+    } else if (i.type === 'study') {
+      h += `<p class="small muted">Gennemført – ${fmtH(durH(i.start, i.end))} lagt til opgaven.</p>`;
+    }
     if (i.type === 'training' || i.type === 'social') {
       h += `<button class="btn block primary" data-action="toggleDone" data-id="${i.id}">${i.done ? 'Markér som ikke gennemført' : 'Markér som gennemført'}</button>`;
     }
@@ -1007,6 +1058,20 @@ const actions = {
     f.elements.forClass.value = JSON.stringify(c);
     if (!f.elements.subject.value) f.elements.subject.value = c.title;
     el.parentElement.querySelectorAll('.chipbtn').forEach(b => b.classList.toggle('on', b === el));
+  },
+  planTask: el => openForm({ type: 'study', mode: 'event', taskId: el.dataset.id }),
+  pickDate: el => {
+    $('#f').elements.date.value = el.dataset.date;
+    el.parentElement.querySelectorAll('.chipbtn').forEach(b => b.classList.toggle('on', b === el));
+  },
+  studyDone: el => {
+    const e = data.events.find(x => x.id === el.dataset.id);
+    const task = data.tasks.find(x => x.id === e.taskId);
+    const h = durH(e.start, e.end);
+    e.done = true;
+    if (task) task.doneHours = (task.doneHours || 0) + h;
+    save(); closeSheet(); render();
+    toast(`+${fmtH(h)} på opgaven`, () => { e.done = false; if (task) task.doneHours = Math.max(0, task.doneHours - h); });
   },
   taskFilter: el => { state.taskFilter = el.dataset.f; render(); },
   pickSubject: el => { $('#f').elements.subject.value = el.dataset.value; },

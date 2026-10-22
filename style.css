@@ -243,3 +243,8 @@ form[data-tkind="laes"] .only-hand, form[data-tkind="lav"] .only-hand, form[data
 .legend .lg { white-space: nowrap; }
 .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
 .legend .dot.seg-free { outline: 1px solid color-mix(in srgb, var(--text) 30%, transparent); }
+
+/* Planlagt skolearbejde */
+:root { --study: var(--task); }
+.t-study { border-left-color: var(--study); }
+.task-actions { flex-wrap: wrap; }
