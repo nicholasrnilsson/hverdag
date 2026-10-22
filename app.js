@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.9';
+const APP_VERSION = '1.10';
 
 // Opgavestørrelser i timer
 const SIZES = { XS: 0.5, S: 1, M: 3, L: 8, XL: 15 };
@@ -370,7 +370,7 @@ function itemRow(i) {
   if (i.locked) tags.push('<span class="tag lock">låst</span>');
   return `<button class="item t-${i.type} ${i.done ? 'done' : ''}" ${itemAttrs(i)}>
     <span class="time">${timeLabel(i)}</span>
-    <span class="what"><b>${esc(itemLabel(i))}</b> ${tags.join(' ')}<br><span class="muted small">${TYPES[i.type]}</span></span>
+    <span class="what"><b>${esc(itemLabel(i))}</b> ${tags.join(' ')}<br><span class="muted small">${i.source === 'import' && (i.location || i.teacher) ? esc([i.location, i.teacher].filter(Boolean).join(' · ')) : TYPES[i.type]}</span></span>
   </button>`;
 }
 
@@ -507,7 +507,7 @@ function renderWeek() {
       ${deadlines.filter(t => !isHomework(t)).map(t => `<button class="deadline-chip" style="border:0" data-action="editTask" data-id="${t.id}">Aflevering: ${esc(t.title)}${t.dueTime ? ' kl. ' + t.dueTime : ''}</button>`).join('')}
       ${deadlines.filter(isHomework).map(t => `<button class="hw-chip" data-action="editTask" data-id="${t.id}">${taskKindLabel(t)}: ${esc(t.title)}</button>`).join('')}
       ${items.map(i => `<button class="mini t-${i.type}" ${itemAttrs(i)} style="border-left-color:var(--${i.type})">
-          <span class="time">${timeLabel(i)}</span><span>${esc(itemLabel(i))}${i.done ? ' ✓' : ''}</span></button>`).join('')}
+          <span class="time">${timeLabel(i)}</span><span>${esc(itemLabel(i))}${i.done ? ' ✓' : ''}${i.location && i.source === 'import' ? `<br><span class="small muted">${esc(i.location)}</span>` : ''}</span></button>`).join('')}
       ${cancelledForDate(d).map(i => cancelledRow(i, true)).join('')}
       ${!items.length && !deadlines.length ? '<div class="small muted" style="padding-top:4px">Fri</div>' : ''}
     </div>`;
@@ -801,7 +801,7 @@ function openItemSheet(el) {
     if (!im) return;
     i = { ...im, source: 'import' };
     openSheet(`<p class="sheet-title">${esc(i.title)}</p>
-      <p class="muted" style="margin-top:0">Fra itslearning · ${fmtDate(i.date)} · ${timeLabel(i)}${i.location ? ' · ' + esc(i.location) : ''}</p>
+      <p class="muted" style="margin-top:0">Fra itslearning · ${fmtDate(i.date)} · ${timeLabel(i)}${i.location ? ' · ' + esc(i.location) : ''}${i.teacher ? ' · ' + esc(i.teacher) : ''}${i.course ? '<br><span class="small">' + esc(i.course) + '</span>' : ''}</p>
       ${i.description ? `<p class="small">${esc(i.description).slice(0, 400)}</p>` : ''}
       <button class="btn block primary" data-action="impToTask" data-imp="${esc(i.id)}">Lav til opgave med deadline</button>
       <button class="btn block" data-action="impSkip" data-imp="${esc(i.id)}">Aflys denne gang (skjul)</button>
@@ -888,6 +888,19 @@ function icsDate(prop) {
   return { date: ymd(d), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
 }
 
+// VIA's titler ser sådan ud: "KA11-MAT-S26: Anvendt matematik - B2.04 - DJAN - KA11-S26"
+// → fag "Anvendt matematik", lokale "B2.04", underviser "DJAN", kursuskode "KA11-MAT-S26"
+function splitViaTitle(raw) {
+  const m = raw.match(/^([A-ZÆØÅ0-9]+(?:-[A-ZÆØÅ0-9]+)+):\s*(.+)$/);   // kun koder som "KA11-MAT-S26
+  if (!m) return { title: raw };
+  const parts = m[2].split(' - ').map(x => x.trim());
+  if (parts.length >= 4) {
+    return { course: m[1].trim(), title: parts.slice(0, parts.length - 3).join(' - '),
+      room: parts[parts.length - 3], teacher: parts[parts.length - 2] };
+  }
+  return { course: m[1].trim(), title: m[2].trim() };
+}
+
 const DEADLINE_WORDS = /aflever|deadline|frist|assignment|hand-?in|indlever/i;
 const COURSE_CODE = /\b[A-ZÆØÅ]{1,4}\d{1,3}-[A-ZÆØÅ]{2,5}-[A-Z]\d{2}\b/;
 
@@ -921,6 +934,12 @@ function icsToItems(events) {
       location: icsText(e.LOCATION), description: icsText(e.DESCRIPTION),
       start: null, end: null,
     };
+    const via = splitViaTitle(item.title);
+    item.rawTitle = item.title;
+    item.title = via.title || item.title;
+    if (via.course) item.course = via.course;
+    if (via.teacher) item.teacher = via.teacher;
+    if (via.room && !item.location) item.location = via.room;
     if (s.time && en && en.time && en.date === s.date && en.time > s.time) {
       item.start = s.time; item.end = en.time; counts.timed++;
     } else if (s.time) {
@@ -980,7 +999,7 @@ async function refreshIcal({ silent = false } = {}) {
     if (added && silent) toast(`${added} ny${added > 1 ? 'e' : ''} aflevering${added > 1 ? 'er' : ''} fra itslearning`);
     data.imported = items;
     data.hiddenImports = data.hiddenImports.filter(id => items.some(i => i.id === id));
-    data.importMeta = { lastFetch: new Date().toISOString(), ok: true, error: null, counts, viaProxy: !!proxy };
+    data.importMeta = { lastFetch: new Date().toISOString(), ok: true, error: null, counts, viaProxy: !!proxy, parser: 2 };
     save(); render();
     if (!silent) toast(`Skema hentet: ${items.length} punkter${deadlines.length ? `, ${deadlines.length} frister` : ''}`);
   } catch (e) {
@@ -1247,7 +1266,8 @@ document.addEventListener('visibilitychange', () => {
 function autoRefreshIcal() {
   if (!data.settings.icalUrl) return;
   const last = data.importMeta.lastFetch ? new Date(data.importMeta.lastFetch) : null;
-  if (!last || Date.now() - last.getTime() > 6 * 3600 * 1000) refreshIcal({ silent: true });
+  // Hent også igen, hvis appen har fået en ny måde at læse skemaet på
+  if (!last || data.importMeta.parser !== 2 || Date.now() - last.getTime() > 6 * 3600 * 1000) refreshIcal({ silent: true });
 }
 
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
