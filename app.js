@@ -15,7 +15,7 @@
 
 // ============ 1. Indstillinger og konstanter ============
 const STORE_KEY = 'hverdag.data.v1';
-const APP_VERSION = '1.7';
+const APP_VERSION = '1.8';
 
 // Opgavestørrelser i timer
 const SIZES = { XS: 0.5, S: 1, M: 3, L: 8, XL: 15 };
@@ -423,6 +423,7 @@ function taskCard(t, opts = {}) {
       <button class="title" data-action="editTask" data-id="${t.id}">${esc(t.title)}</button>
       ${t.important ? '<span class="tag lock">vigtig</span>' : ''}
     </div>
+    ${t.needsEstimate && !t.done ? `<button class="linkbtn small" data-action="editTask" data-id="${t.id}">Fra itslearning – tryk og tjek estimatet (sat til ${fmtH(t.hours)})</button>` : ''}
     <div class="task-meta small muted">${t.subject && !(t.forClass && t.forClass.title === t.subject) ? esc(t.subject) + ' · ' : ''}<span class="${dueCls}">${dueText(t)} (${relDays(t.deadline)})</span>${extra}</div>
     ${t.done ? '' : `<div class="progress"><div style="width:${pct}%"></div></div>`}
     <div class="task-actions">
@@ -717,6 +718,7 @@ function submitForm(form) {
     };
     if (!obj.title || !obj.deadline) return;
     data.settings.lastTaskKind = kind;
+    obj.needsEstimate = false;
     if (item) {
       const dh = parseFloat(g('doneHours').replace(',', '.'));
       Object.assign(item, obj, { doneHours: dh >= 0 ? dh : item.doneHours || 0 });
@@ -795,10 +797,18 @@ function parseIcs(text) {
   // Lange linjer er "foldet": en linje der starter med mellemrum hører til linjen før
   const lines = text.replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n');
   const events = [];
+  const components = {};
   let cur = null;
-  for (const line of lines) {
-    if (line === 'BEGIN:VEVENT') { cur = {}; continue; }
-    if (line === 'END:VEVENT') { if (cur) events.push(cur); cur = null; continue; }
+  for (const raw of lines) {
+    const line = raw.trim();
+    const b = line.match(/^BEGIN:(\w+)$/i);
+    if (b) {
+      const t = b[1].toUpperCase();
+      if (t !== 'VCALENDAR') components[t] = (components[t] || 0) + 1;
+      if (t === 'VEVENT' || t === 'VTODO') cur = { __type: t };
+      continue;
+    }
+    if (/^END:(VEVENT|VTODO)$/i.test(line)) { if (cur) events.push(cur); cur = null; continue; }
     if (!cur) continue;
     const idx = line.indexOf(':');
     if (idx < 0) continue;
@@ -807,6 +817,7 @@ function parseIcs(text) {
     for (const x of params) { const [k, v] = x.split('='); p[k.toUpperCase()] = v; }
     cur[name.toUpperCase()] = { value: line.slice(idx + 1), params: p };
   }
+  events.components = components;
   return events;
 }
 
@@ -826,13 +837,31 @@ function icsDate(prop) {
   return { date: ymd(d), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
 }
 
+const DEADLINE_WORDS = /aflever|deadline|frist|assignment|hand-?in|indlever/i;
+const COURSE_CODE = /\b[A-ZÆØÅ]{1,4}\d{1,3}-[A-ZÆØÅ]{2,5}-[A-Z]\d{2}\b/;
+
 function icsToItems(events) {
   const from = addDays(todayStr(), -30), to = addDays(todayStr(), 240);
-  const items = [], seen = new Set();
-  const counts = { total: events.length, timed: 0, allDay: 0, points: 0, repeating: 0, outside: 0 };
+  const items = [], deadlines = [], seen = new Set();
+  const counts = { total: events.length, timed: 0, allDay: 0, points: 0, repeating: 0, outside: 0, deadlines: 0 };
   for (const e of events) {
-    const s = icsDate(e.DTSTART);
+    const isTodo = e.__type === 'VTODO';
+    const s = icsDate(isTodo ? (e.DUE || e.DTSTART) : e.DTSTART);
     if (!s) continue;
+    const title = icsText(e.SUMMARY);
+    const en0 = icsDate(e.DTEND);
+    const noLength = !en0 || (en0.date === s.date && en0.time === s.time);
+    // En frist er: en to-do, et punkt uden varighed, eller et kort punkt med ord som "aflevering"/"deadline"
+    const shortEvent = en0 && en0.date === s.date && s.time && en0.time && (toMin(en0.time) - toMin(s.time)) <= 60;
+    if (isTodo || (s.time && noLength) || (DEADLINE_WORDS.test(title) && (noLength || shortEvent))) {
+      if (s.date < todayStr()) continue;          // gamle frister er ligegyldige
+      const text = [title, icsText(e.DESCRIPTION), icsText(e.LOCATION), icsText(e.CATEGORIES)].join(' ');
+      const code = text.match(COURSE_CODE);
+      deadlines.push({ uid: (e.UID ? e.UID.value : title + s.date), title: title || 'Aflevering',
+        subject: code ? code[0] : icsText(e.CATEGORIES), date: s.date, time: s.time || '' });
+      counts.deadlines++;
+      continue;
+    }
     if (e.RRULE) counts.repeating++;
     if (s.date < from || s.date > to) { counts.outside++; continue; }
     const en = icsDate(e.DTEND);
@@ -853,7 +882,30 @@ function icsToItems(events) {
     seen.add(id);
     items.push({ id, ...item });
   }
-  return { items, counts };
+  return { items, counts, deadlines };
+}
+
+// Frister fra itslearning bliver til afleveringer. Hver frist importeres kun én gang:
+// sletter du opgaven, kommer den ikke igen. Flytter itslearning fristen, flyttes opgaven med.
+function syncDeadlines(deadlines) {
+  data.importedTaskUids = data.importedTaskUids || [];
+  let added = 0;
+  for (const d of deadlines) {
+    const existing = data.tasks.find(t => t.itsUid === d.uid);
+    if (existing) {
+      if (!existing.done && (existing.deadline !== d.date || (existing.dueTime || '') !== d.time)) {
+        existing.deadline = d.date; existing.dueTime = d.time;
+      }
+      continue;
+    }
+    if (data.importedTaskUids.includes(d.uid)) continue;   // du har slettet den før
+    data.tasks.push({ id: uid(), itsUid: d.uid, kind: 'aflevering', title: d.title, subject: d.subject,
+      deadline: d.date, dueTime: d.time, size: 'M', hours: SIZES.M, needsEstimate: true,
+      important: true, doneHours: 0, done: false, createdAt: todayStr() });
+    data.importedTaskUids.push(d.uid);
+    added++;
+  }
+  return added;
 }
 
 async function refreshIcal({ silent = false } = {}) {
@@ -869,12 +921,17 @@ async function refreshIcal({ silent = false } = {}) {
     const text = await res.text();
     if (!res.ok) throw Object.assign(new Error(`Serveren svarede ${res.status}: ${text.slice(0, 250)}`), { kind: 'http' });
     if (!text.includes('BEGIN:VCALENDAR')) throw Object.assign(new Error(`Svaret var ikke en kalender: ${text.slice(0, 200)}`), { kind: 'format' });
-    const { items, counts } = icsToItems(parseIcs(text));
+    const parsed = parseIcs(text);
+    const { items, counts, deadlines } = icsToItems(parsed);
+    counts.components = parsed.components;
+    counts.samples = [...new Set(parsed.map(e => icsText(e.SUMMARY)).filter(Boolean))].slice(0, 12);
+    const added = syncDeadlines(deadlines);
+    if (added && silent) toast(`${added} ny${added > 1 ? 'e' : ''} aflevering${added > 1 ? 'er' : ''} fra itslearning`);
     data.imported = items;
     data.hiddenImports = data.hiddenImports.filter(id => items.some(i => i.id === id));
     data.importMeta = { lastFetch: new Date().toISOString(), ok: true, error: null, counts, viaProxy: !!proxy };
     save(); render();
-    if (!silent) toast(`Skema hentet: ${items.length} punkter`);
+    if (!silent) toast(`Skema hentet: ${items.length} punkter${deadlines.length ? `, ${deadlines.length} frister` : ''}`);
   } catch (e) {
     const blocked = !e.kind && navigator.onLine !== false; // fetch afvist af browseren
     data.importMeta = { ...data.importMeta, ok: false, lastTry: new Date().toISOString(),
@@ -904,8 +961,11 @@ function importStatusHtml() {
     const n = data.imported.length;
     let h = `<div class="card load ok small"><b>Virker${m.viaProxy ? ' (via hente-tjeneste)' : ''}.</b>
       Sidst hentet ${shortDate(ymd(when))} kl. ${pad(when.getHours())}:${pad(when.getMinutes())}.<br>
-      ${n} punkter: ${c.timed} med start/slut, ${c.allDay} hele dage, ${c.points} med kun et tidspunkt.
-      ${c.repeating ? `<br>Bemærk: ${c.repeating} gentagne begivenheder vises kun første gang endnu.` : ''}</div>`;
+      ${n} undervisningspunkter og <b>${c.deadlines || 0} afleveringsfrister</b>.
+      ${c.repeating ? `<br>Bemærk: ${c.repeating} gentagne begivenheder vises kun første gang endnu.` : ''}
+      ${c.components ? `<details style="margin-top:6px"><summary>Hvad indeholder linket?</summary>
+        Typer: ${Object.entries(c.components).map(([k, v]) => `${k} ${v}`).join(', ') || 'ingen'}<br>
+        Eksempler: ${(c.samples || []).map(esc).join(' · ')}</details>` : ''}</div>`;
     if (n && data.templates.some(t => t.type === 'school')) {
       h += `<button class="btn block" data-action="removeSchoolTemplates">Fjern faste undervisningspunkter (skemaet kommer nu fra itslearning)</button>`;
     }
