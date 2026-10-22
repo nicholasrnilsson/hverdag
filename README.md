@@ -31,4 +31,4 @@ Grænserne kan justeres øverst i `app.js` (`LOAD_OK`, `LOAD_TIGHT`, `SIZES`).
 2. ✅ Import af VIA-skema fra itslearning (Garmin-plan kommer senere)
 3. (Delvist) Opgavetyper: aflevering, læs, lav, forberedelse ✅ – planlægger: forslag til skoleblokke, delopgaver, konflikter (fx langtur før deadline)
 4. Sociale planer med advarsel + søndagsgennemgang
-5. Synk til Mac, notifikationer
+5. Synk til Mac, notifikationer (udskudt – valg mellem A: "Tilføj til Apple Kalender" eller B: push via Cloudflare)
